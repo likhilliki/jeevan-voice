@@ -1,0 +1,132 @@
+Build a production-ready full-stack Voice AI agent called **“Jeevan Voice”** that improves accessibility for low-literacy users using voice-first interaction. The system must integrate Vapi (for voice AI) and Qdrant (for contextual memory and personalization), and be fully deployable on Replit.
+
+## Core Requirements
+
+* Voice-first AI agent (no complex UI needed, simple test interface is enough)
+* Multilingual support (English, Hindi, Kannada at minimum)
+* Context-aware responses using memory
+* Real-world use cases: healthcare guidance, government schemes, financial assistance, and daily navigation
+
+## Tech Stack
+
+* Backend: Python (FastAPI)
+* Vector DB: Qdrant (use cloud or local docker setup)
+* Voice AI: Vapi (API integration)
+* LLM: OpenAI-compatible API (use environment variables)
+* Deployment: Replit (must run with one-click)
+
+## Features to Implement
+
+### 1. Voice Interaction (Vapi)
+
+* Accept voice input via Vapi webhook
+* Convert speech-to-text
+* Send text to backend processing
+* Return AI-generated response as speech
+
+### 2. Context Memory (Qdrant)
+
+* Store conversation embeddings per user
+* Store metadata: language, preferences, past queries
+* Retrieve relevant past context for each query
+* Use semantic search for better responses
+
+### 3. Decision Engine
+
+* Detect user intent:
+
+  * Healthcare (symptoms, urgency)
+  * Finance (balance, schemes)
+  * Government help
+  * General queries
+* Add rule-based layer for critical cases:
+
+  * If emergency keywords (pain, chest, faint) → trigger urgent response mode
+
+### 4. Personalization
+
+* Remember:
+
+  * User language
+  * Past interactions
+* Adapt tone and suggestions accordingly
+
+### 5. API Endpoints
+
+Create clean FastAPI routes:
+
+* POST /vapi-webhook → main voice handler
+* POST /query → text query (for testing)
+* GET /health → health check
+
+### 6. Qdrant Setup
+
+* Create collection: "user_memory"
+* Use embeddings for storing conversations
+* Implement:
+
+  * upsert_memory(user_id, text)
+  * search_memory(user_id, query)
+
+### 7. Response Generation
+
+* Combine:
+
+  * Current query
+  * Retrieved memory
+  * System prompt (empathetic, simple language)
+* Generate conversational, low-literacy-friendly responses
+
+### 8. Deployment Ready
+
+* Use environment variables:
+
+  * OPENAI_API_KEY
+  * QDRANT_URL
+  * QDRANT_API_KEY
+  * VAPI_API_KEY
+* Provide a working `requirements.txt`
+* Provide `main.py` entrypoint
+* Ensure it runs with: `uvicorn main:app --host 0.0.0.0 --port 8000`
+
+### 9. Demo Mode
+
+* Include sample curl or frontend test page
+* Simulate:
+
+  * “I have chest pain”
+  * “Did I receive money?”
+  * “How to apply for a loan?”
+
+### 10. Code Quality
+
+* Clean modular structure:
+
+  * services/
+  * routes/
+  * utils/
+* Add comments explaining logic
+* No placeholder code — everything must run
+
+## Output Requirements
+
+* Full working codebase
+* File structure
+* Setup instructions
+* Example .env file
+* Vapi webhook configuration instructions
+
+## Bonus (if possible)
+
+* Add simple HTML page to test voice/text
+* Add emergency mode response escalation
+* Add multilingual auto-detection
+
+IMPORTANT:
+
+* Do NOT generate pseudo code
+* Do NOT skip integrations
+* Ensure everything is runnable on Replit
+* Keep it simple but powerful
+
+Goal: This should feel like a real startup-level product that demonstrates societal impact and strong technical depth.
