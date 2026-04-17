@@ -1,19 +1,17 @@
-import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import { logger } from "../lib/logger.js";
 
-let geminiClient: GoogleGenAI | null = null;
+let openaiClient: OpenAI | null = null;
 
-function getClient(): GoogleGenAI {
-  if (!geminiClient) {
-    // The user provided their Google AI Studio (Gemini) key as OPENAI_API_KEY.
-    // We accept either GEMINI_API_KEY or OPENAI_API_KEY for flexibility.
-    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+function getClient(): OpenAI {
+  if (!openaiClient) {
+    const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      throw new Error("Missing GEMINI_API_KEY/OPENAI_API_KEY env var");
+      throw new Error("Missing OPENAI_API_KEY env var");
     }
-    geminiClient = new GoogleGenAI({ apiKey });
+    openaiClient = new OpenAI({ apiKey });
   }
-  return geminiClient;
+  return openaiClient;
 }
 
 function isRetryable(err: unknown): boolean {
@@ -58,16 +56,14 @@ async function withRetry<T>(
 export async function createEmbedding(text: string): Promise<number[]> {
   const client = getClient();
   const response = await withRetry(() =>
-    client.models.embedContent({
-      model: "gemini-embedding-001",
-      contents: text,
-      config: {
-        outputDimensionality: 768,
-      },
+    client.embeddings.create({
+      model: "text-embedding-3-small",
+      input: text,
+      dimensions: 768,
     }),
   );
 
-  const values = response.embeddings?.[0]?.values;
+  const values = response.data?.[0]?.embedding;
   if (!values || values.length === 0) {
     throw new Error("Failed to generate embedding");
   }
@@ -225,26 +221,27 @@ export async function generateResponse(
   );
 
   const response = await withRetry(() =>
-    client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: userMessage }],
-        },
+    client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
       ],
-      config: {
-        systemInstruction: systemPrompt,
-        maxOutputTokens: 8192,
-        temperature: 0.7,
-        responseMimeType: "application/json",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        responseSchema: RESPONSE_SCHEMA as any,
+      max_tokens: 800,
+      temperature: 0.7,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "jeevan_response",
+          strict: false,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          schema: RESPONSE_SCHEMA as any,
+        },
       },
     }),
   );
 
-  const raw = response.text || "{}";
+  const raw = response.choices?.[0]?.message?.content || "{}";
   let parsed: AIResponse;
   try {
     parsed = JSON.parse(raw) as AIResponse;
