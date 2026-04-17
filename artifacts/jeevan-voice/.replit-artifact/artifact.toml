@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Jeevan Voice"
+version = "1.0.0"
+id = "artifacts/jeevan-voice"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19427
+
+[services.development]
+run = "pnpm --filter @workspace/jeevan-voice run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/jeevan-voice", "run", "build" ]
+publicDir = "artifacts/jeevan-voice/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19427"
+BASE_PATH = "/"

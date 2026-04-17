@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Jeevan Voice API - Voice AI agent for low-literacy users
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: voice
+    description: Jeevan Voice AI operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,104 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /vapi-webhook:
+    post:
+      operationId: vapiWebhook
+      tags: [voice]
+      summary: Vapi webhook handler
+      description: Receives voice input events from Vapi and returns AI responses
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VapiWebhookPayload"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VapiWebhookResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /query:
+    post:
+      operationId: queryText
+      tags: [voice]
+      summary: Text query endpoint
+      description: Send a text query to the AI agent (for testing without voice)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /memory/{userId}:
+    get:
+      operationId: getUserMemory
+      tags: [voice]
+      summary: Get user memory
+      description: Retrieve stored conversation memory for a user
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User memory entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserMemoryResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      operationId: clearUserMemory
+      tags: [voice]
+      summary: Clear user memory
+      description: Clear all stored memory for a user
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Memory cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +131,143 @@ components:
       properties:
         status:
           type: string
+        qdrant:
+          type: string
+        openai:
+          type: string
       required:
         - status
 
+    VapiWebhookPayload:
+      type: object
+      properties:
+        message:
+          type: object
+          properties:
+            type:
+              type: string
+            call:
+              type: object
+              properties:
+                id:
+                  type: string
+            transcript:
+              type: string
+            customer:
+              type: object
+              properties:
+                number:
+                  type: string
+          required:
+            - type
+      required:
+        - message
+
+    VapiWebhookResponse:
+      type: object
+      properties:
+        response:
+          type: string
+        intent:
+          type: string
+        isEmergency:
+          type: boolean
+        language:
+          type: string
+      required:
+        - response
+        - intent
+        - isEmergency
+        - language
+
+    QueryRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+        text:
+          type: string
+        language:
+          type: string
+          enum: [en, hi, kn, auto]
+          default: auto
+      required:
+        - text
+
+    QueryResponse:
+      type: object
+      properties:
+        response:
+          type: string
+        intent:
+          type: string
+        isEmergency:
+          type: boolean
+        language:
+          type: string
+        userId:
+          type: string
+        memoryUsed:
+          type: boolean
+      required:
+        - response
+        - intent
+        - isEmergency
+        - language
+        - userId
+        - memoryUsed
+
+    UserMemoryResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+        memories:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryEntry"
+        count:
+          type: integer
+      required:
+        - userId
+        - memories
+        - count
+
+    MemoryEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        timestamp:
+          type: string
+        language:
+          type: string
+        intent:
+          type: string
+      required:
+        - id
+        - text
+        - timestamp
+        - language
+        - intent
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+        - message
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
