@@ -74,13 +74,146 @@ export async function createEmbedding(text: string): Promise<number[]> {
   return values;
 }
 
+export interface ActionItem {
+  type: "map" | "directions" | "call" | "link";
+  label: string;
+  query?: string;
+  destination?: string;
+  phone?: string;
+  url?: string;
+}
+
+export interface AIResponse {
+  reply: string;
+  actions: ActionItem[];
+}
+
+const ALLOWED_LINK_HOSTS = [
+  "pmjay.gov.in",
+  "pmkisan.gov.in",
+  "pmjdy.gov.in",
+  "india.gov.in",
+  "mygov.in",
+  "janaushadhi.gov.in",
+  "umang.gov.in",
+  "nhp.gov.in",
+  "mohfw.gov.in",
+  "digitalindia.gov.in",
+];
+
+function isAllowedHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^www\./, "");
+  return ALLOWED_LINK_HOSTS.some(
+    (allowed) => h === allowed || h.endsWith("." + allowed),
+  );
+}
+
+export function sanitizeActions(actions: ActionItem[]): ActionItem[] {
+  if (!Array.isArray(actions)) return [];
+  const cleaned: ActionItem[] = [];
+  for (const a of actions) {
+    if (!a || typeof a !== "object" || !a.label || !a.type) continue;
+    const label = String(a.label).slice(0, 80).trim();
+    if (!label) continue;
+
+    switch (a.type) {
+      case "call": {
+        const phone = String(a.phone || "").replace(/[^0-9+\-]/g, "");
+        if (!phone || phone.length < 3 || phone.length > 20) continue;
+        cleaned.push({ type: "call", label, phone });
+        break;
+      }
+      case "map": {
+        const query = String(a.query || "").slice(0, 200).trim();
+        if (!query) continue;
+        cleaned.push({ type: "map", label, query });
+        break;
+      }
+      case "directions": {
+        const destination = String(a.destination || "").slice(0, 200).trim();
+        if (!destination) continue;
+        cleaned.push({ type: "directions", label, destination });
+        break;
+      }
+      case "link": {
+        const rawUrl = String(a.url || "").trim();
+        if (!rawUrl) continue;
+        try {
+          const u = new URL(rawUrl);
+          if (u.protocol !== "https:") continue;
+          if (!isAllowedHost(u.hostname)) continue;
+          cleaned.push({ type: "link", label, url: u.toString() });
+        } catch {
+          continue;
+        }
+        break;
+      }
+      default:
+        continue;
+    }
+    if (cleaned.length >= 4) break;
+  }
+  return cleaned;
+}
+
+const RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    reply: {
+      type: "string",
+      description:
+        "The spoken reply to the user, simple and warm, in the requested language. 2-4 short sentences.",
+    },
+    actions: {
+      type: "array",
+      description:
+        "1-3 helpful action buttons the user can tap to take real next steps.",
+      items: {
+        type: "object",
+        properties: {
+          type: {
+            type: "string",
+            enum: ["map", "directions", "call", "link"],
+          },
+          label: {
+            type: "string",
+            description:
+              "Short button label in the user's language (max 5 words).",
+          },
+          query: {
+            type: "string",
+            description:
+              "For type=map: place name to search on Google Maps (e.g. 'government hospital near me', 'PMJAY empanelled hospital Bangalore').",
+          },
+          destination: {
+            type: "string",
+            description: "For type=directions: destination address or place.",
+          },
+          phone: {
+            type: "string",
+            description:
+              "For type=call: phone number (e.g. '108', '1800-180-1551').",
+          },
+          url: {
+            type: "string",
+            description:
+              "For type=link: full URL to an official Indian government website.",
+          },
+        },
+        required: ["type", "label"],
+      },
+    },
+  },
+  required: ["reply", "actions"],
+};
+
 export async function generateResponse(
   userQuery: string,
   memoryContext: string,
   intent: string,
   language: string,
   isEmergency: boolean,
-): Promise<string> {
+): Promise<AIResponse> {
   const client = getClient();
 
   const systemPrompt = buildSystemPrompt(language, isEmergency);
@@ -104,13 +237,30 @@ export async function generateResponse(
         systemInstruction: systemPrompt,
         maxOutputTokens: 8192,
         temperature: 0.7,
+        responseMimeType: "application/json",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        responseSchema: RESPONSE_SCHEMA as any,
       },
     }),
   );
 
-  const reply = response.text || "";
-  logger.info({ intent, language, isEmergency }, "Response generated");
-  return reply;
+  const raw = response.text || "{}";
+  let parsed: AIResponse;
+  try {
+    parsed = JSON.parse(raw) as AIResponse;
+    if (!parsed.reply) parsed.reply = "";
+    if (!Array.isArray(parsed.actions)) parsed.actions = [];
+  } catch {
+    parsed = { reply: raw, actions: [] };
+  }
+
+  parsed.actions = sanitizeActions(parsed.actions);
+
+  logger.info(
+    { intent, language, isEmergency, actionCount: parsed.actions.length },
+    "Response generated",
+  );
+  return parsed;
 }
 
 function buildSystemPrompt(language: string, isEmergency: boolean): string {
@@ -124,10 +274,27 @@ function buildSystemPrompt(language: string, isEmergency: boolean): string {
   const langInstruction =
     langInstructions[language] || langInstructions["auto"];
 
+  const actionGuide = `
+You MUST also return 1-3 useful "actions" the user can tap. Pick the right type:
+- type="call" with a phone number (e.g. 108 ambulance, 1800-180-1551 PM Kisan helpline, 14555 Ayushman Bharat helpline, 1916 child helpline, 100 police, 101 fire)
+- type="map" with query="..." for finding nearby places (e.g. "government hospital near me", "PMJAY empanelled hospital", "nearest CSC center", "Jan Aushadhi store near me")
+- type="directions" with destination="..." when the user asks to go somewhere specific
+- type="link" with url="..." pointing ONLY to real official .gov.in / nic.in websites you are sure exist:
+   - https://pmjay.gov.in (Ayushman Bharat)
+   - https://pmkisan.gov.in (PM Kisan)
+   - https://pmjdy.gov.in (Jan Dhan)
+   - https://www.india.gov.in (general schemes)
+   - https://www.mygov.in
+   - https://janaushadhi.gov.in (cheap medicines)
+   - https://www.umang.gov.in (citizen services)
+Action labels MUST be in the user's language. Do NOT invent URLs that may not exist. If unsure, prefer a map or call action.`;
+
   if (isEmergency) {
     return `You are Jeevan, an emergency voice assistant helping people in India. This is an EMERGENCY situation.
 ${langInstruction}
-IMPORTANT: This is urgent. Give immediate, clear instructions. Tell them to call 108 (ambulance) immediately. Be calm but very direct. Keep response under 3 sentences.`;
+IMPORTANT: This is urgent. Give immediate, clear instructions. Tell them to call 108 (ambulance) immediately. Be calm but very direct. Keep response under 3 sentences.
+${actionGuide}
+For emergencies, ALWAYS include a call action for 108 and a map action to find the nearest hospital.`;
   }
 
   return `You are Jeevan, a helpful voice assistant for people in India who may have low literacy.
@@ -139,7 +306,8 @@ Rules:
 - Give step-by-step instructions when needed
 - Keep responses short (2-4 sentences max) — this will be spoken aloud
 - If unsure, give a helpful general direction and suggest who to contact
-- Do not use bullet points or lists — speak naturally`;
+- Do not use bullet points or lists — speak naturally
+${actionGuide}`;
 }
 
 function buildUserMessage(

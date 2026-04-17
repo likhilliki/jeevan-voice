@@ -5,6 +5,7 @@
  * Jeevan Voice API - Voice AI agent for low-literacy users
  * OpenAPI spec version: 0.1.0
  */
+import type { ActionItem } from "./actionItem";
 
 export interface QueryResponse {
   response: string;
@@ -13,4 +14,5 @@ export interface QueryResponse {
   language: string;
   userId: string;
   memoryUsed: boolean;
+  actions: ActionItem[];
 }

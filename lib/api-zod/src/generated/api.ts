@@ -43,6 +43,18 @@ export const VapiWebhookResponse = zod.object({
   intent: zod.string(),
   isEmergency: zod.boolean(),
   language: zod.string(),
+  actions: zod
+    .array(
+      zod.object({
+        type: zod.enum(["map", "directions", "call", "link"]),
+        label: zod.string(),
+        query: zod.string().optional(),
+        destination: zod.string().optional(),
+        phone: zod.string().optional(),
+        url: zod.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 /**
@@ -66,6 +78,16 @@ export const QueryTextResponse = zod.object({
   language: zod.string(),
   userId: zod.string(),
   memoryUsed: zod.boolean(),
+  actions: zod.array(
+    zod.object({
+      type: zod.enum(["map", "directions", "call", "link"]),
+      label: zod.string(),
+      query: zod.string().optional(),
+      destination: zod.string().optional(),
+      phone: zod.string().optional(),
+      url: zod.string().optional(),
+    }),
+  ),
 });
 
 /**

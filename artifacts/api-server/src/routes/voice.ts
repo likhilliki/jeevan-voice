@@ -44,6 +44,7 @@ router.post("/vapi-webhook", async (req, res) => {
         intent: result.intent,
         isEmergency: result.isEmergency,
         language: result.language,
+        actions: result.actions,
       });
 
     } else if (messageType === "function-call") {
@@ -87,6 +88,7 @@ router.post("/query", async (req, res) => {
       language: result.language,
       userId: result.userId,
       memoryUsed: result.memoryUsed,
+      actions: result.actions,
     });
 
   } catch (err) {

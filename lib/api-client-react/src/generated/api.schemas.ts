@@ -30,11 +30,31 @@ export interface VapiWebhookPayload {
   message: VapiWebhookPayloadMessage;
 }
 
+export type ActionItemType =
+  (typeof ActionItemType)[keyof typeof ActionItemType];
+
+export const ActionItemType = {
+  map: "map",
+  directions: "directions",
+  call: "call",
+  link: "link",
+} as const;
+
+export interface ActionItem {
+  type: ActionItemType;
+  label: string;
+  query?: string;
+  destination?: string;
+  phone?: string;
+  url?: string;
+}
+
 export interface VapiWebhookResponse {
   response: string;
   intent: string;
   isEmergency: boolean;
   language: string;
+  actions?: ActionItem[];
 }
 
 export type QueryRequestLanguage =
@@ -60,6 +80,7 @@ export interface QueryResponse {
   language: string;
   userId: string;
   memoryUsed: boolean;
+  actions: ActionItem[];
 }
 
 export interface MemoryEntry {

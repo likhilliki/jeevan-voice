@@ -6,6 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./actionItem";
+export * from "./actionItemType";
 export * from "./errorResponse";
 export * from "./healthStatus";
 export * from "./memoryEntry";

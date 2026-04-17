@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BrainCircuit } from "lucide-react";
+import { ActionButtons } from "@/components/action-buttons";
 
 const DEMO_SCENARIOS = [
   {
@@ -172,6 +173,11 @@ export default function DemoPage() {
                   {response.response}
                 </p>
               </div>
+
+              <ActionButtons
+                actions={response.actions || []}
+                isEmergency={response.isEmergency}
+              />
             </div>
           ) : null}
         </div>

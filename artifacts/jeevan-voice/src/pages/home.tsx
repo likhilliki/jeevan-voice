@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Mic, Send, AlertTriangle, Languages, BrainCircuit } from "lucide-react";
+import { Mic, MicOff, Send, AlertTriangle, Languages, BrainCircuit, Volume2, VolumeX } from "lucide-react";
 import { useQueryText, QueryRequestLanguage, QueryResponse } from "@workspace/api-client-react";
 import { getOrCreateUserId } from "@/lib/userId";
+import {
+  isSpeechRecognitionSupported,
+  isSpeechSynthesisSupported,
+  startListening,
+  speak,
+  stopSpeaking,
+} from "@/lib/voice";
+import { ActionButtons } from "@/components/action-buttons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -14,23 +22,39 @@ export default function Home() {
   const [language, setLanguage] = useState<QueryRequestLanguage>("auto");
   const [userId, setUserId] = useState<string>("");
   const [response, setResponse] = useState<QueryResponse | null>(null);
-  
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const recognitionRef = useRef<ReturnType<typeof startListening> | null>(null);
+
   const { toast } = useToast();
   const queryMutation = useQueryText();
+  const voiceSupported = isSpeechRecognitionSupported();
+  const ttsSupported = isSpeechSynthesisSupported();
 
   useEffect(() => {
     setUserId(getOrCreateUserId());
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!text.trim() || !userId) return;
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+      if (recognitionRef.current) recognitionRef.current.abort();
+    };
+  }, []);
 
+  const submitQuery = (queryText: string) => {
+    if (!queryText.trim() || !userId) return;
+    stopSpeaking();
+    setIsSpeaking(false);
     queryMutation.mutate(
-      { data: { text, userId, language } },
+      { data: { text: queryText, userId, language } },
       {
         onSuccess: (data) => {
           setResponse(data);
+          if (ttsSupported && data.response) {
+            speak(data.response, data.language || language);
+            setIsSpeaking(true);
+          }
         },
         onError: () => {
           toast({
@@ -38,31 +62,88 @@ export default function Home() {
             description: "Could not reach the assistant. Please try again.",
             variant: "destructive",
           });
-        }
-      }
+        },
+      },
     );
   };
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitQuery(text);
+  };
+
   const handleMicClick = () => {
-    toast({
-      title: "Voice Input",
-      description: "Voice features are handled by Vapi on the server side. Type your query for now.",
-    });
+    if (!voiceSupported) {
+      toast({
+        title: "Voice not supported",
+        description: "Your browser doesn't support voice input. Please type instead.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    setIsListening(true);
+    recognitionRef.current = startListening(
+      language,
+      (transcript) => {
+        setText(transcript);
+        setIsListening(false);
+        submitQuery(transcript);
+      },
+      (error) => {
+        setIsListening(false);
+        if (error !== "no-speech" && error !== "aborted") {
+          toast({
+            title: "Voice error",
+            description: error,
+            variant: "destructive",
+          });
+        }
+      },
+      () => setIsListening(false),
+    );
+  };
+
+  const toggleSpeak = () => {
+    if (isSpeaking) {
+      stopSpeaking();
+      setIsSpeaking(false);
+    } else if (response?.response) {
+      speak(response.response, response.language || language);
+      setIsSpeaking(true);
+    }
   };
 
   return (
     <div className="flex-1 flex flex-col px-4 py-8 max-w-2xl mx-auto w-full h-full justify-center">
-      
       <div className="flex flex-col items-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
         <button
           onClick={handleMicClick}
-          className="w-32 h-32 rounded-full bg-primary flex items-center justify-center text-primary-foreground shadow-xl hover:scale-105 active:scale-95 transition-all duration-300 hover:shadow-primary/30 hover:shadow-2xl focus:outline-none focus:ring-4 focus:ring-primary/20"
+          aria-label={isListening ? "Stop listening" : "Start voice input"}
+          className={`relative w-32 h-32 rounded-full flex items-center justify-center text-primary-foreground shadow-xl hover:scale-105 active:scale-95 transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-primary/20 ${
+            isListening
+              ? "bg-destructive hover:shadow-destructive/30 hover:shadow-2xl"
+              : "bg-primary hover:shadow-primary/30 hover:shadow-2xl"
+          }`}
         >
-          <Mic className="w-12 h-12" />
+          {isListening ? <MicOff className="w-12 h-12" /> : <Mic className="w-12 h-12" />}
+          {isListening && (
+            <span className="absolute inset-0 rounded-full border-4 border-destructive animate-ping" />
+          )}
         </button>
-        <h2 className="mt-6 text-3xl font-bold text-center">How can I help you today?</h2>
+        <h2 className="mt-6 text-3xl font-bold text-center">
+          {isListening ? "Listening..." : "How can I help you today?"}
+        </h2>
         <p className="text-muted-foreground mt-2 text-center max-w-md">
-          Speak to me in English, Hindi, or Kannada. I can help with health, government schemes, and more.
+          {voiceSupported
+            ? "Tap the microphone and speak in English, Hindi, or Kannada."
+            : "Type your question in English, Hindi, or Kannada."}
         </p>
       </div>
 
@@ -131,22 +212,39 @@ export default function Home() {
               <Badge variant="secondary" className="capitalize text-sm py-1 px-2">{response.intent}</Badge>
               <Badge variant="outline" className="uppercase text-xs py-1 px-2 bg-muted/50">{response.language}</Badge>
             </div>
-            {response.memoryUsed && (
-              <Badge variant="outline" className="flex items-center gap-1 border-primary/20 text-primary bg-primary/5 text-xs py-1 px-2">
-                <BrainCircuit className="w-3.5 h-3.5" />
-                Memory Applied
-              </Badge>
-            )}
+            <div className="flex items-center gap-2">
+              {response.memoryUsed && (
+                <Badge variant="outline" className="flex items-center gap-1 border-primary/20 text-primary bg-primary/5 text-xs py-1 px-2">
+                  <BrainCircuit className="w-3.5 h-3.5" />
+                  Memory Applied
+                </Badge>
+              )}
+              {ttsSupported && response.response && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleSpeak}
+                  aria-label={isSpeaking ? "Stop speaking" : "Speak reply"}
+                  className="h-8 w-8 rounded-full"
+                >
+                  {isSpeaking ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                </Button>
+              )}
+            </div>
           </div>
-          
+
           <div className="prose prose-slate max-w-none">
             <p className="text-lg leading-relaxed text-foreground whitespace-pre-wrap">
               {response.response}
             </p>
           </div>
+
+          <ActionButtons
+            actions={response.actions || []}
+            isEmergency={response.isEmergency}
+          />
         </div>
       )}
-
     </div>
   );
 }

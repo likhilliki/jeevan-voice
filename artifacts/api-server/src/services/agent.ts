@@ -7,11 +7,12 @@ import {
   type Intent,
   type Language,
 } from "./intentDetector.js";
-import { createEmbedding, generateResponse } from "./openai.js";
 import {
-  upsertMemory,
-  searchMemory,
-} from "./qdrant.js";
+  createEmbedding,
+  generateResponse,
+  type ActionItem,
+} from "./openai.js";
+import { upsertMemory, searchMemory } from "./qdrant.js";
 
 export interface AgentResult {
   response: string;
@@ -20,6 +21,21 @@ export interface AgentResult {
   language: Language;
   userId: string;
   memoryUsed: boolean;
+  actions: ActionItem[];
+}
+
+function getEmergencyActions(language: Language): ActionItem[] {
+  const labels: Record<string, { call: string; map: string }> = {
+    hi: { call: "108 पर कॉल करें", map: "पास का अस्पताल" },
+    kn: { call: "108 ಕರೆ ಮಾಡಿ", map: "ಹತ್ತಿರದ ಆಸ್ಪತ್ರೆ" },
+    en: { call: "Call 108 Ambulance", map: "Nearest hospital" },
+    auto: { call: "Call 108 Ambulance", map: "Nearest hospital" },
+  };
+  const l = labels[language] || labels.en;
+  return [
+    { type: "call", label: l.call, phone: "108" },
+    { type: "map", label: l.map, query: "government hospital near me" },
+  ];
 }
 
 export async function processQuery(
@@ -27,7 +43,6 @@ export async function processQuery(
   userId: string,
   preferredLanguage?: string,
 ): Promise<AgentResult> {
-  // Step 1: Detect intent and language
   const intent = detectIntent(text);
   const detectedLanguage = detectLanguage(text);
   const language: Language =
@@ -36,11 +51,9 @@ export async function processQuery(
 
   logger.info({ userId, intent, language, isEmergency }, "Processing query");
 
-  // Step 2: Handle emergency immediately without waiting for memory
   if (isEmergency) {
     const emergencyResponse = getEmergencyResponse(language);
 
-    // Store the emergency query in memory asynchronously (don't block response)
     storeMemoryAsync(userId, text, language, "emergency").catch((err) => {
       logger.error({ err }, "Failed to store emergency memory");
     });
@@ -52,35 +65,30 @@ export async function processQuery(
       language,
       userId,
       memoryUsed: false,
+      actions: getEmergencyActions(language),
     };
   }
 
-  // Step 3: Create embedding for the query
   let queryEmbedding: number[] = [];
   let memoryContext = "";
   let memoryUsed = false;
 
   try {
     queryEmbedding = await createEmbedding(text);
-
-    // Step 4: Search for relevant past conversations
     const memories = await searchMemory(userId, queryEmbedding, 3);
 
     if (memories.length > 0) {
-      // Build context from top relevant memories
       memoryContext = memories
-        .filter((m) => m.score > 0.5) // Only use moderately relevant memories
+        .filter((m) => m.score > 0.5)
         .map((m) => m.text)
         .join(". ");
       memoryUsed = memoryContext.length > 0;
     }
   } catch (err) {
-    // Memory lookup failed — still answer but without context
     logger.warn({ err }, "Memory lookup failed, continuing without context");
   }
 
-  // Step 5: Generate AI response
-  const response = await generateResponse(
+  const aiResponse = await generateResponse(
     text,
     memoryContext,
     intent,
@@ -88,7 +96,6 @@ export async function processQuery(
     false,
   );
 
-  // Step 6: Store this interaction in memory (async, don't block)
   if (queryEmbedding.length > 0) {
     storeMemoryWithEmbeddingAsync(userId, text, queryEmbedding, {
       language,
@@ -104,12 +111,13 @@ export async function processQuery(
   }
 
   return {
-    response,
+    response: aiResponse.reply,
     intent,
     isEmergency: false,
     language,
     userId,
     memoryUsed,
+    actions: aiResponse.actions || [],
   };
 }
 

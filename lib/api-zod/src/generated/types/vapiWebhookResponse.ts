@@ -5,10 +5,12 @@
  * Jeevan Voice API - Voice AI agent for low-literacy users
  * OpenAPI spec version: 0.1.0
  */
+import type { ActionItem } from "./actionItem";
 
 export interface VapiWebhookResponse {
   response: string;
   intent: string;
   isEmergency: boolean;
   language: string;
+  actions?: ActionItem[];
 }
