@@ -35,11 +35,13 @@ See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and pa
   - `GET /api/memory/:userId` — list past conversations
   - `DELETE /api/memory/:userId` — clear memory
   - `GET /api/healthz` — health/status
-- **AI provider**: Google Gemini via `@google/genai` SDK. Reads `GEMINI_API_KEY` or `OPENAI_API_KEY` (the user provided their Gemini key under `OPENAI_API_KEY`).
-  - Chat: `gemini-2.5-flash`
-  - Embeddings: `gemini-embedding-001` with `outputDimensionality: 768`
-  - Built-in retry with exponential backoff for 429/500/503
-- **Vector memory**: Qdrant Cloud (`QDRANT_URL`, `QDRANT_API_KEY`). Collection `user_memory`, 768 dims, cosine distance, payload index on `userId` (auto-created).
-- **Intent + emergency detection**: rule-based keywords across English / Hindi (script + romanized) / Kannada in `services/intentDetector.ts`. Emergency intent short-circuits the LLM and returns 108 ambulance instructions immediately.
-- **Key files**: `services/agent.ts` (orchestration), `services/openai.ts` (Gemini client, despite filename), `services/qdrant.ts`, `services/intentDetector.ts`, `routes/voice.ts`.
+- **AI provider**: Anthropic Claude via Replit AI Integrations (`AI_INTEGRATIONS_ANTHROPIC_BASE_URL` + `AI_INTEGRATIONS_ANTHROPIC_API_KEY`, auto-configured by Replit, billed to Replit credits — no user key required).
+  - Chat: `claude-haiku-4-5` with tool-use (forced `respond_to_user` tool) for structured `{reply, actions[]}` output.
+  - Built-in retry with exponential backoff for 429/500/503.
+- **User memory**: Simple in-memory FIFO of last 10 messages per `userId` in `services/qdrant.ts` (file kept as-is for backward-compatible imports). Anthropic does not provide embeddings, and Qdrant is no longer used at runtime. Memory resets on server restart — acceptable for the demo.
+- **Voice & actions**:
+  - Frontend uses the browser Web Speech API (`startListening` / `speak` in `lib/voice.ts`) for input + TTS reply in en-IN / hi-IN / kn-IN. No external STT key required.
+  - Each Claude reply ships 1-3 sanitized action buttons (`type: call | map | directions | link`). Server-side `sanitizeActions` enforces phone digit-only, https-only links on a `.gov.in` allowlist (pmjay, pmkisan, pmjdy, india.gov.in, mygov, janaushadhi, umang, etc.) to prevent prompt-injection of unsafe URLs. `<ActionButtons>` renders them as anchors to `tel:`, Google Maps, or the validated URL.
+- **Intent + emergency detection**: rule-based keywords across English / Hindi (script + romanized) / Kannada in `services/intentDetector.ts`. Emergency intent short-circuits the LLM, returns hardcoded 108 ambulance reply + map action.
+- **Key files**: `services/agent.ts` (orchestration), `services/openai.ts` (Anthropic client + `sanitizeActions`, despite filename), `services/qdrant.ts` (in-memory store), `services/intentDetector.ts`, `routes/voice.ts`, `artifacts/jeevan-voice/src/lib/voice.ts`, `artifacts/jeevan-voice/src/components/action-buttons.tsx`.
 

@@ -1,219 +1,93 @@
-import { randomUUID } from "node:crypto";
-import { QdrantClient } from "@qdrant/js-client-rest";
 import { logger } from "../lib/logger.js";
 
-const COLLECTION_NAME = "user_memory";
-const VECTOR_SIZE = 768; // gemini text-embedding-004 dimension
+// Simple in-memory recent-messages store keyed by userId.
+// Replaces the previous Qdrant vector store since the active LLM provider
+// (Anthropic Claude via Replit AI Integrations) does not offer embeddings.
+//
+// This is intentionally lightweight for a demo: per-user FIFO of the last
+// MAX_PER_USER messages. Memory is reset on server restart, which is fine
+// for short conversational continuity.
 
-let client: QdrantClient | null = null;
+const MAX_PER_USER = 10;
 
-function getClient(): QdrantClient {
-  if (!client) {
-    const url = process.env.QDRANT_URL || "http://localhost:6333";
-    const apiKey = process.env.QDRANT_API_KEY;
+export interface MemoryEntry {
+  id: string;
+  text: string;
+  timestamp: string;
+  language: string;
+  intent: string;
+}
 
-    client = new QdrantClient({
-      url,
-      ...(apiKey ? { apiKey } : {}),
-    });
-  }
-  return client;
+const store = new Map<string, MemoryEntry[]>();
+
+let entryCounter = 0;
+function nextId(): string {
+  entryCounter += 1;
+  return `mem_${Date.now()}_${entryCounter}`;
 }
 
 export async function initCollection(): Promise<void> {
-  const qdrant = getClient();
-  try {
-    const collections = await qdrant.getCollections();
-    const exists = collections.collections.some(
-      (c) => c.name === COLLECTION_NAME,
-    );
-
-    if (!exists) {
-      await qdrant.createCollection(COLLECTION_NAME, {
-        vectors: {
-          size: VECTOR_SIZE,
-          distance: "Cosine",
-        },
-      });
-      logger.info({ collection: COLLECTION_NAME }, "Qdrant collection created");
-    } else {
-      // Verify the dimension matches; if not, recreate
-      try {
-        const info = await qdrant.getCollection(COLLECTION_NAME);
-        const params = info.config?.params?.vectors as
-          | { size?: number }
-          | undefined;
-        const existingSize = params?.size;
-        if (existingSize && existingSize !== VECTOR_SIZE) {
-          logger.warn(
-            { existingSize, expected: VECTOR_SIZE },
-            "Qdrant collection dimension mismatch — recreating",
-          );
-          await qdrant.deleteCollection(COLLECTION_NAME);
-          await qdrant.createCollection(COLLECTION_NAME, {
-            vectors: {
-              size: VECTOR_SIZE,
-              distance: "Cosine",
-            },
-          });
-          logger.info(
-            { collection: COLLECTION_NAME },
-            "Qdrant collection recreated with new dimension",
-          );
-        } else {
-          logger.info(
-            { collection: COLLECTION_NAME },
-            "Qdrant collection already exists",
-          );
-        }
-      } catch (innerErr) {
-        logger.warn({ err: innerErr }, "Failed to check collection dimension");
-      }
-    }
-    // Ensure payload index on userId exists (required for filtered search)
-    try {
-      await qdrant.createPayloadIndex(COLLECTION_NAME, {
-        field_name: "userId",
-        field_schema: "keyword",
-      });
-      logger.info({ field: "userId" }, "Qdrant payload index ensured");
-    } catch (idxErr) {
-      logger.debug({ err: idxErr }, "Payload index already exists or skipped");
-    }
-  } catch (err) {
-    logger.error({ err }, "Failed to initialize Qdrant collection");
-    throw err;
-  }
+  logger.info("In-memory user memory store initialized");
 }
 
 export async function upsertMemory(
   userId: string,
   text: string,
-  embedding: number[],
+  _embedding: number[],
   metadata: {
     language: string;
     intent: string;
     timestamp: string;
   },
 ): Promise<void> {
-  const qdrant = getClient();
-  const id = randomUUID(); // collision-safe UUID
+  const entry: MemoryEntry = {
+    id: nextId(),
+    text,
+    language: metadata.language,
+    intent: metadata.intent,
+    timestamp: metadata.timestamp,
+  };
 
-  await qdrant.upsert(COLLECTION_NAME, {
-    points: [
-      {
-        id,
-        vector: embedding,
-        payload: {
-          userId,
-          text,
-          language: metadata.language,
-          intent: metadata.intent,
-          timestamp: metadata.timestamp,
-        },
-      },
-    ],
-  });
+  const existing = store.get(userId) || [];
+  existing.push(entry);
+  // Keep only the most recent MAX_PER_USER entries.
+  while (existing.length > MAX_PER_USER) existing.shift();
+  store.set(userId, existing);
 
-  logger.info({ userId, intent: metadata.intent }, "Memory stored");
+  logger.info(
+    { userId, intent: metadata.intent, total: existing.length },
+    "Memory stored",
+  );
 }
 
 export async function searchMemory(
   userId: string,
-  queryEmbedding: number[],
+  _queryEmbedding: number[],
   limit = 5,
 ): Promise<
-  Array<{
-    id: string;
-    text: string;
-    timestamp: string;
-    language: string;
-    intent: string;
-    score: number;
-  }>
+  Array<MemoryEntry & { score: number }>
 > {
-  const qdrant = getClient();
-
-  const results = await qdrant.search(COLLECTION_NAME, {
-    vector: queryEmbedding,
-    limit,
-    filter: {
-      must: [
-        {
-          key: "userId",
-          match: { value: userId },
-        },
-      ],
-    },
-    with_payload: true,
-  });
-
-  return results.map((r) => ({
-    id: String(r.id),
-    text: (r.payload?.text as string) || "",
-    timestamp: (r.payload?.timestamp as string) || "",
-    language: (r.payload?.language as string) || "en",
-    intent: (r.payload?.intent as string) || "general",
-    score: r.score,
-  }));
+  const entries = store.get(userId) || [];
+  // Return most recent `limit` messages, newest first, with a constant score
+  // above the agent's 0.5 threshold so they're treated as relevant context.
+  return entries
+    .slice(-limit)
+    .reverse()
+    .map((e) => ({ ...e, score: 0.9 }));
 }
 
-export async function getUserMemories(userId: string): Promise<
-  Array<{
-    id: string;
-    text: string;
-    timestamp: string;
-    language: string;
-    intent: string;
-  }>
-> {
-  const qdrant = getClient();
-
-  const results = await qdrant.scroll(COLLECTION_NAME, {
-    filter: {
-      must: [
-        {
-          key: "userId",
-          match: { value: userId },
-        },
-      ],
-    },
-    with_payload: true,
-    limit: 50,
-  });
-
-  return (results.points || []).map((r) => ({
-    id: String(r.id),
-    text: (r.payload?.text as string) || "",
-    timestamp: (r.payload?.timestamp as string) || "",
-    language: (r.payload?.language as string) || "en",
-    intent: (r.payload?.intent as string) || "general",
-  }));
+export async function getUserMemories(
+  userId: string,
+): Promise<MemoryEntry[]> {
+  const entries = store.get(userId) || [];
+  return entries.slice().reverse();
 }
 
 export async function clearUserMemory(userId: string): Promise<void> {
-  const qdrant = getClient();
-
-  await qdrant.delete(COLLECTION_NAME, {
-    filter: {
-      must: [
-        {
-          key: "userId",
-          match: { value: userId },
-        },
-      ],
-    },
-  });
-
+  store.delete(userId);
   logger.info({ userId }, "User memory cleared");
 }
 
 export async function checkHealth(): Promise<string> {
-  try {
-    const qdrant = getClient();
-    await qdrant.getCollections();
-    return "connected";
-  } catch {
-    return "disconnected";
-  }
+  return "connected";
 }

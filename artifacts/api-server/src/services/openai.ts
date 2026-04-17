@@ -1,38 +1,28 @@
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 
-let openaiClient: OpenAI | null = null;
+let anthropicClient: Anthropic | null = null;
 
-function getClient(): OpenAI {
-  if (!openaiClient) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Missing OPENAI_API_KEY env var");
+function getClient(): Anthropic {
+  if (!anthropicClient) {
+    const baseURL = process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
+    const apiKey = process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
+    if (!baseURL || !apiKey) {
+      throw new Error("Missing Anthropic AI integration env vars");
     }
-    openaiClient = new OpenAI({ apiKey });
+    anthropicClient = new Anthropic({ baseURL, apiKey });
   }
-  return openaiClient;
+  return anthropicClient;
 }
 
 function isRetryable(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as Record<string, unknown>;
-  // Try multiple shapes: top-level status, nested response/error, code
-  const candidates: Array<unknown> = [
-    e.status,
-    (e.response as Record<string, unknown> | undefined)?.status,
-    ((e.error as Record<string, unknown> | undefined)?.code) as unknown,
-    e.code,
-  ];
-  for (const c of candidates) {
-    const n = typeof c === "string" ? parseInt(c, 10) : (c as number);
-    if (n === 429 || n === 500 || n === 503 || n === 504) return true;
-  }
-  // Last resort: check message
+  const status = (e.status as number | undefined) ?? 0;
+  if (status === 429 || status === 500 || status === 503 || status === 504)
+    return true;
   const msg = String((e.message as string | undefined) || "");
-  return /\b(429|500|503|504|UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|rate limit)\b/i.test(
-    msg,
-  );
+  return /\b(429|500|503|504|overloaded|rate limit)\b/i.test(msg);
 }
 
 async function withRetry<T>(
@@ -53,21 +43,23 @@ async function withRetry<T>(
   throw lastErr;
 }
 
-export async function createEmbedding(text: string): Promise<number[]> {
-  const client = getClient();
-  const response = await withRetry(() =>
-    client.embeddings.create({
-      model: "text-embedding-3-small",
-      input: text,
-      dimensions: 768,
-    }),
-  );
+// Embeddings are not needed in the Claude-only flow — memory is now stored
+// as recent text snippets per user (see qdrant.ts replacement).
+// We keep this export for backward compatibility but it just returns an empty
+// array to indicate "no embedding available".
+export async function createEmbedding(_text: string): Promise<number[]> {
+  return [];
+}
 
-  const values = response.data?.[0]?.embedding;
-  if (!values || values.length === 0) {
-    throw new Error("Failed to generate embedding");
+export async function checkHealth(): Promise<string> {
+  try {
+    const baseURL = process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
+    const apiKey = process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
+    if (!baseURL || !apiKey) return "disconnected";
+    return "connected";
+  } catch {
+    return "disconnected";
   }
-  return values;
 }
 
 export interface ActionItem {
@@ -152,55 +144,58 @@ export function sanitizeActions(actions: ActionItem[]): ActionItem[] {
   return cleaned;
 }
 
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    reply: {
-      type: "string",
-      description:
-        "The spoken reply to the user, simple and warm, in the requested language. 2-4 short sentences.",
-    },
-    actions: {
-      type: "array",
-      description:
-        "1-3 helpful action buttons the user can tap to take real next steps.",
-      items: {
-        type: "object",
-        properties: {
-          type: {
-            type: "string",
-            enum: ["map", "directions", "call", "link"],
+// Claude tool definition that forces structured JSON output.
+const RESPOND_TOOL: Anthropic.Tool = {
+  name: "respond_to_user",
+  description:
+    "Send the spoken reply to the user along with 1-3 actionable buttons they can tap.",
+  input_schema: {
+    type: "object",
+    properties: {
+      reply: {
+        type: "string",
+        description:
+          "The spoken reply in the user's language. 2-4 short sentences.",
+      },
+      actions: {
+        type: "array",
+        description: "1-3 helpful action buttons the user can tap.",
+        items: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              enum: ["map", "directions", "call", "link"],
+            },
+            label: {
+              type: "string",
+              description: "Short button label in the user's language.",
+            },
+            query: {
+              type: "string",
+              description:
+                "For type=map: place name to search on Google Maps.",
+            },
+            destination: {
+              type: "string",
+              description: "For type=directions: destination address or place.",
+            },
+            phone: {
+              type: "string",
+              description: "For type=call: phone number (e.g. '108').",
+            },
+            url: {
+              type: "string",
+              description:
+                "For type=link: full https:// URL to an official Indian gov website.",
+            },
           },
-          label: {
-            type: "string",
-            description:
-              "Short button label in the user's language (max 5 words).",
-          },
-          query: {
-            type: "string",
-            description:
-              "For type=map: place name to search on Google Maps (e.g. 'government hospital near me', 'PMJAY empanelled hospital Bangalore').",
-          },
-          destination: {
-            type: "string",
-            description: "For type=directions: destination address or place.",
-          },
-          phone: {
-            type: "string",
-            description:
-              "For type=call: phone number (e.g. '108', '1800-180-1551').",
-          },
-          url: {
-            type: "string",
-            description:
-              "For type=link: full URL to an official Indian government website.",
-          },
+          required: ["type", "label"],
         },
-        required: ["type", "label"],
       },
     },
+    required: ["reply", "actions"],
   },
-  required: ["reply", "actions"],
 };
 
 export async function generateResponse(
@@ -221,34 +216,30 @@ export async function generateResponse(
   );
 
   const response = await withRetry(() =>
-    client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-      max_tokens: 800,
-      temperature: 0.7,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "jeevan_response",
-          strict: false,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          schema: RESPONSE_SCHEMA as any,
-        },
-      },
+    client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 8192,
+      system: systemPrompt,
+      tools: [RESPOND_TOOL],
+      tool_choice: { type: "tool", name: "respond_to_user" },
+      messages: [{ role: "user", content: userMessage }],
     }),
   );
 
-  const raw = response.choices?.[0]?.message?.content || "{}";
-  let parsed: AIResponse;
-  try {
-    parsed = JSON.parse(raw) as AIResponse;
-    if (!parsed.reply) parsed.reply = "";
-    if (!Array.isArray(parsed.actions)) parsed.actions = [];
-  } catch {
-    parsed = { reply: raw, actions: [] };
+  let parsed: AIResponse = { reply: "", actions: [] };
+
+  for (const block of response.content) {
+    if (block.type === "tool_use" && block.name === "respond_to_user") {
+      const input = block.input as Partial<AIResponse>;
+      parsed = {
+        reply: String(input.reply || ""),
+        actions: Array.isArray(input.actions) ? input.actions : [],
+      };
+      break;
+    }
+    if (block.type === "text" && !parsed.reply) {
+      parsed.reply = block.text;
+    }
   }
 
   parsed.actions = sanitizeActions(parsed.actions);
@@ -272,7 +263,7 @@ function buildSystemPrompt(language: string, isEmergency: boolean): string {
     langInstructions[language] || langInstructions["auto"];
 
   const actionGuide = `
-You MUST also return 1-3 useful "actions" the user can tap. Pick the right type:
+You MUST call the respond_to_user tool with 1-3 useful actions the user can tap. Pick the right type:
 - type="call" with a phone number (e.g. 108 ambulance, 1800-180-1551 PM Kisan helpline, 14555 Ayushman Bharat helpline, 1916 child helpline, 100 police, 101 fire)
 - type="map" with query="..." for finding nearby places (e.g. "government hospital near me", "PMJAY empanelled hospital", "nearest CSC center", "Jan Aushadhi store near me")
 - type="directions" with destination="..." when the user asks to go somewhere specific
@@ -322,16 +313,8 @@ function buildUserMessage(
   if (isEmergency) {
     message += `EMERGENCY: ${query}`;
   } else {
-    message += `User question (intent: ${intent}): ${query}`;
+    message += `[Detected intent: ${intent}]\n${query}`;
   }
 
   return message;
-}
-
-export async function checkHealth(): Promise<string> {
-  // Just verify the API key is configured — actual reachability is verified
-  // on real query traffic with retries built in. A live ping for every health
-  // probe would consume quota and false-flag transient overloads.
-  const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-  return apiKey ? "configured" : "disconnected";
 }
