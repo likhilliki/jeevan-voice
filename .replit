@@ -30,3 +30,8 @@ externalPort = 80
 [[ports]]
 localPort = 19427
 externalPort = 3000
+
+[userenv]
+
+[userenv.shared]
+QDRANT_URL = "https://31f9914a-5380-4b39-ad3c-83250a463402.us-west-2-0.aws.cloud.qdrant.io"

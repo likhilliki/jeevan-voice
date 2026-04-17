@@ -69,7 +69,7 @@ export async function processQuery(
     if (memories.length > 0) {
       // Build context from top relevant memories
       memoryContext = memories
-        .filter((m) => m.score > 0.7) // Only use high-relevance memories
+        .filter((m) => m.score > 0.5) // Only use moderately relevant memories
         .map((m) => m.text)
         .join(". ");
       memoryUsed = memoryContext.length > 0;

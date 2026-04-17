@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Mic, Activity, CheckCircle2, AlertCircle } from "lucide-react";
 import { useHealthCheck } from "@workspace/api-client-react";
+import { getOrCreateUserId } from "@/lib/userId";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -10,12 +11,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [userId, setUserId] = useState<string>("");
 
   useEffect(() => {
-    let id = localStorage.getItem("jeevan_user_id");
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem("jeevan_user_id", id);
-    }
-    setUserId(id);
+    setUserId(getOrCreateUserId());
   }, []);
 
   return (

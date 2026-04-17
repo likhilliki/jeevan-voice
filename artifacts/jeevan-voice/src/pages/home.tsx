@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Mic, Send, AlertTriangle, Languages, BrainCircuit } from "lucide-react";
 import { useQueryText, QueryRequestLanguage, QueryResponse } from "@workspace/api-client-react";
+import { getOrCreateUserId } from "@/lib/userId";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -18,8 +19,7 @@ export default function Home() {
   const queryMutation = useQueryText();
 
   useEffect(() => {
-    const id = localStorage.getItem("jeevan_user_id");
-    if (id) setUserId(id);
+    setUserId(getOrCreateUserId());
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
